@@ -15,6 +15,7 @@ interface SearchViewProps {
 
 const DEFAULT_QUERY =
   'Arabidopsis thaliana RNA-Seq under drought and water stress in root';
+const MAX_RESULTS_DEFAULT = 200;
 
 export function SearchView({
   loading,
@@ -28,7 +29,6 @@ export function SearchView({
 }: SearchViewProps) {
   const [naturalQuery, setNaturalQuery] = useState(DEFAULT_QUERY);
   const [source, setSource] = useState<SourceMode>('pubmed');
-  const [maxResults, setMaxResults] = useState(20);
   const [useLlm, setUseLlm] = useState(true);
 
   const sourceDescription = useMemo(() => {
@@ -42,7 +42,7 @@ export function SearchView({
     await onGenerate({
       natural_query: naturalQuery.trim(),
       source,
-      max_results: maxResults,
+      max_results: MAX_RESULTS_DEFAULT,
       use_llm: useLlm,
     });
   }
@@ -79,18 +79,6 @@ export function SearchView({
               <option value="bioproject">BioProject</option>
             </select>
             <small>{sourceDescription}</small>
-          </label>
-
-          <label className="field">
-            <span>Maximum results</span>
-            <input
-              type="number"
-              min={1}
-              max={200}
-              value={maxResults}
-              onChange={(event) => setMaxResults(Number(event.target.value))}
-            />
-            <small>Allowed range: 1 to 200.</small>
           </label>
         </div>
 

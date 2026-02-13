@@ -36,6 +36,43 @@ function formatTag(tag: string): string {
     .replace(/^alineacion:/, 'alignment: ');
 }
 
+function pubmedTypeLabel(publicationType: string): string {
+  if (publicationType.toLowerCase().includes('review')) return 'Review';
+  return 'Article';
+}
+
+function shortAuthors(authors: string[] | undefined, max: number = 3): string {
+  if (!authors || authors.length === 0) return '-';
+  if (authors.length <= max) return authors.join(', ');
+  return `${authors.slice(0, max).join(', ')} +${authors.length - max}`;
+}
+
+function parseCount(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+type TissueLabel = 'root' | 'leaf' | 'seed' | 'fruit' | 'whole-plant' | 'unknown';
+
+const TISSUE_COLORS: Record<TissueLabel, string> = {
+  root: '#19d3a2',
+  leaf: '#3b82f6',
+  seed: '#9b5de5',
+  fruit: '#f59e0b',
+  'whole-plant': '#10b981',
+  unknown: '#334155',
+};
+
+function inferTissue(text: string): TissueLabel {
+  const t = text.toLowerCase();
+  if (/\broot|roots|radic/i.test(t)) return 'root';
+  if (/\bleaf|leaves|foliar/i.test(t)) return 'leaf';
+  if (/\bseed|seedling/i.test(t)) return 'seed';
+  if (/\bfruit|fruits|tomato fruit/i.test(t)) return 'fruit';
+  if (/\bplant|whole plant|seedling\b/i.test(t)) return 'whole-plant';
+  return 'unknown';
+}
+
 export function ResultsView({ response }: ResultsViewProps) {
   const [searchText, setSearchText] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -53,23 +90,131 @@ export function ResultsView({ response }: ResultsViewProps) {
   }, [response, searchText]);
 
   const selected = filteredResults[selectedIndex] ?? null;
+  const isPubmedSource = response.metadata.source === 'pubmed';
 
   const streamStats = useMemo(() => {
-    if (!response) return { high: 0, medium: 0, low: 0, direct: 0, weak: 0 };
-    let high = 0;
-    let medium = 0;
-    let low = 0;
-    let direct = 0;
-    let weak = 0;
-    response.results.forEach((result) => {
-      if (result.classification.relevance_label === 'alta') high += 1;
-      if (result.classification.relevance_label === 'media') medium += 1;
-      if (result.classification.relevance_label === 'baja') low += 1;
-      if (result.classification.evidence_level === 'directa') direct += 1;
-      if (result.classification.evidence_level === 'débil') weak += 1;
+    if (!response) {
+      return {
+        total: 0,
+        withDoi: 0,
+        withPmcid: 0,
+        reviews: 0,
+        journals: 0,
+        years: [] as string[],
+        projects: 0,
+        experiments: 0,
+        biosamples: 0,
+        runs: 0,
+        withLinkedPapers: 0,
+        tissueCounts: {} as Record<TissueLabel, number>,
+      };
+    }
+
+    if (response.metadata.source !== 'pubmed') {
+      const rows = response.results.filter((item): item is BioprojectResult => 'bioproject' in item);
+      const tissueCounts: Record<TissueLabel, number> = {
+        root: 0,
+        leaf: 0,
+        seed: 0,
+        fruit: 0,
+        'whole-plant': 0,
+        unknown: 0,
+      };
+      let experiments = 0;
+      let biosamples = 0;
+      let runs = 0;
+      let withLinkedPapers = 0;
+
+      rows.forEach((row) => {
+        const haystack = `${row.title ?? ''} ${row.description ?? ''}`;
+        tissueCounts[inferTissue(haystack)] += 1;
+        experiments += parseCount(row.sra_experiments_count);
+        biosamples += parseCount(row.biosamples_count);
+        runs += parseCount(row.sra_runs_count);
+        if (parseCount(row.publications_found) > 0) withLinkedPapers += 1;
+      });
+
+      return {
+        total: rows.length,
+        withDoi: 0,
+        withPmcid: 0,
+        reviews: 0,
+        journals: 0,
+        years: [],
+        projects: rows.length,
+        experiments,
+        biosamples,
+        runs,
+        withLinkedPapers,
+        tissueCounts,
+      };
+    }
+
+    const rows = response.results.filter((item): item is PubmedResult => 'pmid' in item);
+    const journals = new Set<string>();
+    const years = new Set<string>();
+    const tissueCounts: Record<TissueLabel, number> = {
+      root: 0,
+      leaf: 0,
+      seed: 0,
+      fruit: 0,
+      'whole-plant': 0,
+      unknown: 0,
+    };
+    let withDoi = 0;
+    let withPmcid = 0;
+    let reviews = 0;
+
+    rows.forEach((row) => {
+      const doi = String(row.doi ?? '').trim().toUpperCase();
+      const pmcid = String(row.pmcid ?? '').trim().toUpperCase();
+      const publicationType = String(row.publication_type ?? '').toLowerCase();
+      if (doi && doi !== 'NA') withDoi += 1;
+      if (pmcid && pmcid !== 'NA') withPmcid += 1;
+      if (publicationType.includes('review')) reviews += 1;
+      if (row.journal) journals.add(row.journal);
+      if (row.year) years.add(row.year);
+      tissueCounts[inferTissue(`${row.title ?? ''} ${row.abstract ?? ''}`)] += 1;
     });
-    return { high, medium, low, direct, weak };
+
+    return {
+      total: rows.length,
+      withDoi,
+      withPmcid,
+      reviews,
+      journals: journals.size,
+      years: Array.from(years).sort((a, b) => Number(a) - Number(b)),
+      projects: 0,
+      experiments: 0,
+      biosamples: 0,
+      runs: 0,
+      withLinkedPapers: 0,
+      tissueCounts,
+    };
   }, [response]);
+
+  const tissueEntries = useMemo(() => {
+    const ordered = Object.entries(streamStats.tissueCounts || {})
+      .filter(([, count]) => count > 0)
+      .sort((a, b) => b[1] - a[1]) as Array<[TissueLabel, number]>;
+    return ordered.length ? ordered : ([['unknown', streamStats.total]] as Array<[TissueLabel, number]>);
+  }, [streamStats]);
+
+  const tissueDonutStyle = useMemo(() => {
+    const total = Math.max(1, streamStats.total);
+    let start = 0;
+    const slices = tissueEntries.map(([label, count]) => {
+      const pct = (count / total) * 100;
+      const end = start + pct;
+      const slice = `${TISSUE_COLORS[label]} ${start}% ${end}%`;
+      start = end;
+      return slice;
+    });
+    if (start < 100) {
+      slices.push(`#334155 ${start}% 100%`);
+    }
+    return `conic-gradient(${slices.join(', ')})`;
+  }, [tissueEntries, streamStats.total]);
 
   if (!response) {
     return (
@@ -109,51 +254,52 @@ export function ResultsView({ response }: ResultsViewProps) {
 
       <section className="repo-metadata-stream">
         <div className="stream-column">
-          <p>METADATA_STREAM_B</p>
+          <p>{isPubmedSource ? 'PUBMED SNAPSHOT' : 'BIOPROJECT SNAPSHOT'}</p>
+          <div className="stream-kpis">
+            <article>
+              <strong>{streamStats.total}</strong>
+              <span>{isPubmedSource ? 'papers' : 'projects'}</span>
+            </article>
+            <article>
+              <strong>{isPubmedSource ? streamStats.withDoi : streamStats.experiments}</strong>
+              <span>{isPubmedSource ? 'with DOI' : 'experiments'}</span>
+            </article>
+            <article>
+              <strong>{isPubmedSource ? streamStats.withPmcid : streamStats.runs}</strong>
+              <span>{isPubmedSource ? 'with PMCID' : 'runs'}</span>
+            </article>
+            <article>
+              <strong>{isPubmedSource ? streamStats.reviews : streamStats.biosamples}</strong>
+              <span>{isPubmedSource ? 'reviews' : 'biosamples'}</span>
+            </article>
+          </div>
+        </div>
+        <div className="stream-column">
+          <p>TISSUE EXPLORED</p>
+          <div className="tissue-donut-wrap">
+            <div className="tissue-donut" style={{ background: tissueDonutStyle }} />
+            <div className="tissue-legend">
+              {tissueEntries.slice(0, 5).map(([label, count]) => (
+                <div key={label}>
+                  <span style={{ background: TISSUE_COLORS[label] }} />
+                  <small>{label}</small>
+                  <strong>{count}</strong>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="stream-column">
+          <p>{isPubmedSource ? 'SOURCE QUALITY' : 'PROJECT CONTEXT'}</p>
           <div className="stream-bars">
             <article>
-              <strong>{response.metadata.total_results}</strong>
-              <span>records</span>
+              <strong>{isPubmedSource ? streamStats.journals : streamStats.withLinkedPapers}</strong>
+              <span>{isPubmedSource ? 'journals' : 'linked papers'}</span>
             </article>
             <article>
-              <strong>{streamStats.high}</strong>
-              <span>high</span>
+              <strong>{isPubmedSource ? streamStats.years.length : filteredResults.length}</strong>
+              <span>{isPubmedSource ? 'year span' : 'filtered'}</span>
             </article>
-            <article>
-              <strong>{streamStats.direct}</strong>
-              <span>direct</span>
-            </article>
-          </div>
-        </div>
-        <div className="stream-column">
-          <p>TEMPORAL DISTRIBUTION</p>
-          <div className="dot-grid">
-            {Array.from({ length: 40 }).map((_, idx) => (
-              <span key={idx} className={idx % 3 === 0 ? 'on' : ''} />
-            ))}
-          </div>
-        </div>
-        <div className="stream-column">
-          <p>MORPHOLOGY</p>
-          <div className="donut-wrap">
-            <div
-              className="donut"
-              style={{
-                background: `conic-gradient(#19d3a2 0 ${Math.max(5, streamStats.high * 8)}%, #3b82f6 0 ${Math.max(
-                  15,
-                  streamStats.medium * 8 + streamStats.high * 8
-                )}%, #9b5de5 0 100%)`,
-              }}
-            />
-            <div
-              className="donut"
-              style={{
-                background: `conic-gradient(#16a34a 0 ${Math.max(10, streamStats.direct * 10)}%, #f59e0b 0 ${Math.max(
-                  25,
-                  streamStats.weak * 10 + streamStats.direct * 10
-                )}%, #334155 0 100%)`,
-              }}
-            />
           </div>
         </div>
       </section>
@@ -161,14 +307,28 @@ export function ResultsView({ response }: ResultsViewProps) {
       <div className="repo-table-wrap">
         <table className="repo-table">
           <thead>
-            <tr>
-              <th>{response.metadata.source === 'bioproject' ? 'BIOPROJECT ID' : 'PUBMED ID'}</th>
-              <th>TITLE / CONTEXT</th>
-              <th>ORGANISM / JOURNAL</th>
-              <th>DOI</th>
-              <th>TISSUE</th>
-              <th>STRATEGY</th>
-            </tr>
+            {isPubmedSource ? (
+              <tr>
+                <th>PUBMED ID</th>
+                <th>YEAR</th>
+                <th>TITLE / CONTEXT</th>
+                <th>AUTHORS</th>
+                <th>JOURNAL</th>
+                <th>DOI</th>
+                <th>PMCID</th>
+                <th>TYPE</th>
+              </tr>
+            ) : (
+              <tr>
+                <th>BIOPROJECT ID</th>
+                <th>TITLE / CONTEXT</th>
+                <th>ORGANISM</th>
+                <th>TISSUE</th>
+                <th>EXPS</th>
+                <th>RUNS</th>
+                <th>STRATEGY</th>
+              </tr>
+            )}
           </thead>
           <tbody>
             {filteredResults.map((item, index) => {
@@ -176,33 +336,45 @@ export function ResultsView({ response }: ResultsViewProps) {
               const tags = item.classification.tags ?? [];
               const tissueTag = extractTagByPrefix(tags, 'tejido:');
               const strategyTag = extractTagByPrefix(tags, 'estrategia:');
+              if (isPubmed(response.metadata.source, item)) {
+                return (
+                  <tr
+                    key={`${index}-${item.pmid}`}
+                    className={active ? 'active' : ''}
+                    onClick={() => setSelectedIndex(index)}
+                  >
+                    <td className="repo-id">{item.pmid}</td>
+                    <td>{item.year || '-'}</td>
+                    <td className="repo-title">{shortText(item.title || 'Untitled record', 66)}</td>
+                    <td className="repo-authors">{shortText(shortAuthors(item.authors), 44)}</td>
+                    <td className="repo-organism">{shortText(item.journal || 'Unknown journal', 34)}</td>
+                    <td className="repo-doi">{item.doi && item.doi !== 'NA' ? item.doi : '-'}</td>
+                    <td>{item.pmcid && item.pmcid !== 'NA' ? item.pmcid : '-'}</td>
+                    <td>
+                      <span className="repo-chip">{pubmedTypeLabel(item.publication_type ?? 'Journal Article').toUpperCase()}</span>
+                    </td>
+                  </tr>
+                );
+              }
+
               return (
                 <tr
-                  key={`${index}-${'pmid' in item ? item.pmid : (item as BioprojectResult).bioproject}`}
+                  key={`${index}-${isBioproject(response.metadata.source, item) ? item.bioproject : index}`}
                   className={active ? 'active' : ''}
                   onClick={() => setSelectedIndex(index)}
                 >
                   <td className="repo-id">
-                    {isPubmed(response.metadata.source, item)
-                      ? item.pmid
-                      : isBioproject(response.metadata.source, item)
-                      ? item.bioproject
-                      : '-'}
+                    {isBioproject(response.metadata.source, item) ? item.bioproject : '-'}
                   </td>
                   <td className="repo-title">{shortText(item.title || 'Untitled record')}</td>
                   <td className="repo-organism">
-                    {isPubmed(response.metadata.source, item)
-                      ? item.journal || 'Unknown journal'
-                      : isBioproject(response.metadata.source, item)
-                      ? item.organism || 'Unknown organism'
-                      : '-'}
-                  </td>
-                  <td className="repo-doi">
-                    {isPubmed(response.metadata.source, item) ? item.doi || '-' : '-'}
+                    {isBioproject(response.metadata.source, item) ? item.organism || 'Unknown organism' : '-'}
                   </td>
                   <td>
                     <span className="repo-chip">{tissueTag.toUpperCase()}</span>
                   </td>
+                  <td>{isBioproject(response.metadata.source, item) ? parseCount(item.sra_experiments_count) : '-'}</td>
+                  <td>{isBioproject(response.metadata.source, item) ? parseCount(item.sra_runs_count) : '-'}</td>
                   <td>{strategyTag === '-' ? '-' : shortText(strategyTag, 20)}</td>
                 </tr>
               );
@@ -216,6 +388,37 @@ export function ResultsView({ response }: ResultsViewProps) {
         {selected ? (
           <>
             <p>{selected.classification.reason_short}</p>
+            {isPubmed(response.metadata.source, selected) ? (
+              <dl>
+                <div>
+                  <dt>DOI</dt>
+                  <dd>{selected.doi && selected.doi !== 'NA' ? selected.doi : '-'}</dd>
+                </div>
+                <div>
+                  <dt>PMCID</dt>
+                  <dd>{selected.pmcid && selected.pmcid !== 'NA' ? selected.pmcid : '-'}</dd>
+                </div>
+                <div>
+                  <dt>PubMed URL</dt>
+                  <dd>{selected.url ? <a className="repo-link" href={selected.url} target="_blank" rel="noreferrer">Open</a> : '-'}</dd>
+                </div>
+              </dl>
+            ) : isBioproject(response.metadata.source, selected) ? (
+              <dl>
+                <div>
+                  <dt>Experiments</dt>
+                  <dd>{parseCount(selected.sra_experiments_count)}</dd>
+                </div>
+                <div>
+                  <dt>Biosamples</dt>
+                  <dd>{parseCount(selected.biosamples_count)}</dd>
+                </div>
+                <div>
+                  <dt>Runs</dt>
+                  <dd>{parseCount(selected.sra_runs_count)}</dd>
+                </div>
+              </dl>
+            ) : null}
             <ul>
               {selected.classification.tags.map((tag) => (
                 <li key={tag}>{formatTag(tag)}</li>

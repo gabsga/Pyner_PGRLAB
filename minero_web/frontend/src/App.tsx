@@ -42,6 +42,43 @@ interface PendingRun {
   query_generation: QueryGeneration;
 }
 
+function PickaxeLogo() {
+  return (
+    <svg
+      className="pickaxe-logo"
+      viewBox="0 0 64 64"
+      role="img"
+      aria-label="Minero logo with pickaxe"
+    >
+      <defs>
+        <linearGradient id="coalBg" x1="0%" x2="100%" y1="0%" y2="100%">
+          <stop offset="0%" stopColor="#eef3fb" />
+          <stop offset="100%" stopColor="#d8e2f2" />
+        </linearGradient>
+        <linearGradient id="goldEdge" x1="0%" x2="100%" y1="0%" y2="0%">
+          <stop offset="0%" stopColor="#f3d77f" />
+          <stop offset="100%" stopColor="#c69c1a" />
+        </linearGradient>
+      </defs>
+
+      <rect x="4" y="4" width="56" height="56" rx="18" fill="url(#coalBg)" />
+      <rect x="4" y="4" width="56" height="56" rx="18" fill="none" stroke="url(#goldEdge)" strokeWidth="2.4" />
+
+      <path d="M22 42L39 25" stroke="#5f6f85" strokeWidth="5" strokeLinecap="round" />
+      <path
+        d="M18 20C24 14 36 13 46 18C38 22 28 24 20 22"
+        fill="none"
+        stroke="#d4b14a"
+        strokeWidth="4.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M41 16L46 11" stroke="#d4b14a" strokeWidth="3.2" strokeLinecap="round" />
+      <circle cx="22" cy="42" r="2.5" fill="#f3d77f" />
+    </svg>
+  );
+}
+
 export default function App() {
   const [view, setView] = useState<AppView>('buscar');
   const [status, setStatus] = useState<AppStatus>('idle');
@@ -128,7 +165,7 @@ export default function App() {
       <aside className="sidebar">
         <header className="sidebar-header">
           <div className="brand-cluster">
-            <div className="brand-mark" aria-hidden="true" />
+            <PickaxeLogo />
             <div>
               <p className="brand-eyebrow">PGRLAB NODE</p>
               <h1>Minero</h1>
