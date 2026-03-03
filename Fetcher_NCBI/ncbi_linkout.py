@@ -83,9 +83,9 @@ def extract_pubmed_metadata(pubmed_id: str) -> Optional[Dict]:
         if article is None:
             return None
         
-        # Title
+        # Title (use itertext() to get all text including sub-elements like <i>, <sub>, etc.)
         title_elem = article.find('.//ArticleTitle')
-        title = title_elem.text if title_elem is not None else ''
+        title = ''.join(title_elem.itertext()) if title_elem is not None else ''
         
         # Abstract (use itertext() to get all text including sub-elements like <sub>, <sup>, etc.)
         abstract_elem = article.find('.//AbstractText')
@@ -326,21 +326,35 @@ class LinkoutFetcher:
             self.logger.error(f"Search failed: {e}")
             return {"bioproject": bioproject_id, "publications": []}
     
-    def search_publications_by_boolean_query(self, query: str, max_results: int = 100) -> List[Dict]:
+    def search_publications_by_boolean_query(self, query: str, max_results: int = 100, db: str = 'pubmed') -> List[Dict]:
         """
-        Direct boolean search in PubMed.
+        Direct boolean search in PubMed or PMC.
         
         Args:
             query: Boolean query string (e.g., "Arabidopsis AND phosphate")
             max_results: Maximum number of publications to retrieve
+            db: Database to search ('pubmed' or 'pmc')
         
         Returns:
             List of publication dictionaries with metadata
         """
+        db_label = "PMC (full-text)" if db == 'pmc' else "PubMed"
+        
+        # PMC uses different field tags than PubMed (see PMC User Guide)
+        # [All Fields] → [all], [Organism] not supported → [all]
+        search_query = query
+        if db == 'pmc':
+            import re as re_mod
+            search_query = re_mod.sub(r'\[Organism\]', '[all]', search_query)
+            search_query = re_mod.sub(r'\[All Fields\]', '[all]', search_query)
+            if search_query != query:
+                self.logger.info("ℹ️  Adjusted query for PMC: [Organism]/[All Fields] → [all]")
+        
         self.logger.info("\n" + "="*70)
-        self.logger.info(f"🔍 DIRECT PUBMED SEARCH")
+        self.logger.info(f"🔍 DIRECT {db_label.upper()} SEARCH")
         self.logger.info("="*70)
-        self.logger.info(f"Query: {query}")
+        self.logger.info(f"Query: {search_query}")
+        self.logger.info(f"Database: {db_label}")
         self.logger.info(f"Max results: {max_results}")
         
         publications = []
@@ -348,21 +362,28 @@ class LinkoutFetcher:
         try:
             time.sleep(RATE_LIMIT)
             
-            # Search PubMed with boolean query
+            # Search the specified database
             handle = Entrez.esearch(
-                db='pubmed',
-                term=query,
+                db=db,
+                term=search_query,
                 retmax=max_results,
                 sort='relevance'
             )
             result = Entrez.read(handle)
             handle.close()
             
-            pmids = result.get('IdList', [])
+            ids = result.get('IdList', [])
             total_count = int(result.get('Count', 0))
             
-            self.logger.info(f"Found {total_count} total matches")
-            self.logger.info(f"Retrieving {len(pmids)} publications...")
+            self.logger.info(f"Found {total_count} total matches in {db_label}")
+            self.logger.info(f"Retrieving {len(ids)} publications...")
+            
+            if db == 'pmc':
+                # PMC returns PMC IDs — convert to PMIDs via elink
+                pmids = self._convert_pmc_to_pmids(ids)
+                self.logger.info(f"Converted {len(pmids)} PMC articles to PubMed IDs")
+            else:
+                pmids = ids
             
             # Fetch metadata for each PMID
             for i, pmid in enumerate(pmids, 1):
@@ -378,9 +399,63 @@ class LinkoutFetcher:
             self.logger.info(f"\n✓ Retrieved {len(publications)} publications")
             
         except Exception as e:
-            self.logger.error(f"PubMed search failed: {e}")
+            self.logger.error(f"{db_label} search failed: {e}")
         
         return publications
+    
+    def _convert_pmc_to_pmids(self, pmc_ids: List[str]) -> List[str]:
+        """
+        Convert PMC IDs to PubMed IDs using Entrez elink.
+        Only gets the article's own PMID (pmc_pubmed), not referenced articles.
+        
+        Args:
+            pmc_ids: List of PMC IDs (numeric, without 'PMC' prefix)
+        
+        Returns:
+            List of PubMed IDs
+        """
+        if not pmc_ids:
+            return []
+        
+        pmids = []
+        # Process in smaller batches to avoid IncompleteRead errors
+        batch_size = 20
+        total_batches = (len(pmc_ids) + batch_size - 1) // batch_size
+        
+        for batch_num, i in enumerate(range(0, len(pmc_ids), batch_size), 1):
+            batch = pmc_ids[i:i + batch_size]
+            self.logger.info(f"  Converting PMC batch {batch_num}/{total_batches} ({len(batch)} IDs)...")
+            
+            # Retry logic for network reliability
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    time.sleep(RATE_LIMIT * (attempt + 1))  # Increasing delay on retries
+                    handle = Entrez.elink(
+                        dbfrom='pmc',
+                        db='pubmed',
+                        linkname='pmc_pubmed',  # Only the article's own PMID, NOT references
+                        id=batch
+                    )
+                    results = Entrez.read(handle)
+                    handle.close()
+                    
+                    for record in results:
+                        link_sets = record.get('LinkSetDb', [])
+                        for link_set in link_sets:
+                            for link in link_set.get('Link', []):
+                                pmid = link.get('Id', '')
+                                if pmid and pmid not in pmids:
+                                    pmids.append(pmid)
+                    break  # Success, exit retry loop
+                    
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        self.logger.warning(f"⚠️ Batch {batch_num} attempt {attempt+1} failed: {e}. Retrying...")
+                    else:
+                        self.logger.warning(f"⚠️ Batch {batch_num} failed after {max_retries} attempts: {e}")
+        
+        return pmids
     
     def print_summary(self):
         """Print summary statistics."""

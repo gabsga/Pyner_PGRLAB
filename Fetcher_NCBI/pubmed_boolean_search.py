@@ -6,7 +6,7 @@ Direct PubMed Boolean Search
 Búsqueda directa en PubMed usando queries booleanos.
 
 Usage:
-    python pubmed_boolean_search.py "Arabidopsis AND phosphate" --max 50 --output results.csv
+    python pubmed_boolean_search.py "Arabidopsis AND phosphate" --max 50 --output results.tsv
 """
 
 import sys
@@ -28,20 +28,20 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def save_pubmed_results_csv(publications: List[Dict], output_file: Path):
+def save_pubmed_results_tsv(publications: List[Dict], output_file: Path):
     """
-    Save PubMed search results to CSV.
+    Save PubMed search results to TSV.
     
     Args:
         publications: List of publication dictionaries
-        output_file: Output CSV path
+        output_file: Output TSV path
     """
     if not publications:
         logger.warning("No publications to save")
         return
     
     logger.info(f"\n{'='*70}")
-    logger.info("💾 SAVING RESULTS TO CSV")
+    logger.info("💾 SAVING RESULTS TO TSV")
     logger.info(f"{'='*70}")
     
     fieldnames = [
@@ -60,7 +60,7 @@ def save_pubmed_results_csv(publications: List[Dict], output_file: Path):
     
     try:
         with open(output_file, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames, restval='NA')
+            writer = csv.DictWriter(f, fieldnames=fieldnames, restval='NA', delimiter='\t')
             writer.writeheader()
             
             for pub in publications:
@@ -90,7 +90,7 @@ def save_pubmed_results_csv(publications: List[Dict], output_file: Path):
         logger.info(f"  - Publications without DOI: {len(publications) - with_doi}")
         
     except Exception as e:
-        logger.error(f"Error saving CSV: {e}")
+        logger.error(f"Error saving TSV: {e}")
 
 
 def save_pubmed_results_json(publications: List[Dict], query: str, output_file: Path):
@@ -141,34 +141,44 @@ def main():
         help="Maximum number of publications to retrieve (default: 100)"
     )
     parser.add_argument(
-        "--output-csv",
+        "--output-tsv",
         type=Path,
-        help="Output CSV file (default: auto-generated)"
+        help="Output TSV file (default: auto-generated)"
     )
     parser.add_argument(
         "--output-json",
         type=Path,
         help="Output JSON file (optional)"
     )
+    parser.add_argument(
+        "--db",
+        choices=['pubmed', 'pmc'],
+        default='pubmed',
+        help="Database to search: 'pubmed' (titles/abstracts) or 'pmc' (full-text, more results). Default: pubmed"
+    )
     
     args = parser.parse_args()
     
     # Generate default output filename if not provided
-    if not args.output_csv:
+    if not args.output_tsv:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        args.output_csv = Path(f"pubmed_results_{timestamp}.csv")
+        args.output_tsv = Path(f"pubmed_results_{timestamp}.tsv")
+    
+    db_label = "PMC (full-text)" if args.db == 'pmc' else "PubMed"
     
     logger.info(f"\n{'*'*70}")
-    logger.info("🔬 PUBMED DIRECT BOOLEAN SEARCH")
+    logger.info(f"🔬 {db_label.upper()} DIRECT BOOLEAN SEARCH")
     logger.info(f"{'*'*70}")
     logger.info(f"Query: {args.query}")
+    logger.info(f"Database: {db_label}")
     logger.info(f"Max results: {args.max}")
     
     # Execute search
     fetcher = LinkoutFetcher()
     publications = fetcher.search_publications_by_boolean_query(
         args.query,
-        max_results=args.max
+        max_results=args.max,
+        db=args.db
     )
     
     if not publications:
@@ -180,7 +190,7 @@ def main():
         return
     
     # Save results
-    save_pubmed_results_csv(publications, args.output_csv)
+    save_pubmed_results_tsv(publications, args.output_tsv)
     
     if args.output_json:
         save_pubmed_results_json(publications, args.query, args.output_json)

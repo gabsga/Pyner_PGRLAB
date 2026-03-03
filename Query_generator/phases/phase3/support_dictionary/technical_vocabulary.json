@@ -706,5 +706,8 @@
     "gorilla": "Gorilla gorilla",
     "nematode": "Caenorhabditis elegans",
     "mosquito": "Aedes aegypti"
+  },
+  "gene_aliases": {
+    "myb60": ["myb60", "MYB60", "AtMYB60", "ATMYB60", "F22O13.30", "F22O13_30"]
   }
 }

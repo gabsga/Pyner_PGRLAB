@@ -115,7 +115,7 @@ class PaperAnalyzer:
         
         for idx, paper in enumerate(publications, 1):
             logger.info(f"\n[{idx}/{self.stats['total']}] Analyzing: {paper.get('pmid', 'N/A')}")
-            logger.info(f"   Title: {paper.get('title', 'No title')[:80]}...")
+            logger.info(f"   Title: {(paper.get('title') or 'No title')[:80]}...")
             
             try:
                 classified = self._analyze_single_paper(paper, user_query)
@@ -135,6 +135,8 @@ class PaperAnalyzer:
             # Log successful results (outside try/except to avoid duplicates)
             try:
                 logger.info(f"   ✓ Relevance: {classified['Relevance_Score']}/10")
+                logger.info(f"   ✓ Explanation: {classified['Relevance_Explanation']}")
+                logger.info(f"   ✓ Summary: {classified['Summary']}")
                 logger.info(f"   ✓ Organisms: {classified['Organisms'][:60]}")
                 logger.info(f"   ✓ Tissues_Organs: {classified['Tissues_Organs'][:60]}")
                 logger.info(f"   ✓ Conditions: {classified['Conditions'][:60]}")
@@ -145,7 +147,7 @@ class PaperAnalyzer:
     
     def _analyze_single_paper(self, paper: Dict, user_query: str) -> Dict:
         """Analyze single paper with Ollama"""
-        title = paper.get('title', '')
+        title = paper.get('title') or ''
         abstract = paper.get('abstract', '')[:MAX_ABSTRACT_LENGTH]
         pmcid = paper.get('pmcid', None)
         
@@ -214,6 +216,8 @@ class PaperAnalyzer:
             # Relevance
             'Relevance_Score': analysis['relevance_score'],
             'Is_Relevant': 'Yes' if analysis['relevance_score'] >= RELEVANCE_THRESHOLD else 'No',
+            'Summary': format_scalar(analysis.get('summary', '')),
+            'Relevance_Explanation': format_scalar(analysis.get('relevance_explanation', '')),
             
             # Organism Details (EXPANDED)
             'Organisms': format_array(analysis.get('organisms', [])),
@@ -295,12 +299,14 @@ class PaperAnalyzer:
         error_dict = {
             'PMID': paper.get('pmid', 'N/A'),
             'PMCID': paper.get('pmcid', 'N/A'),
-            'Title': paper.get('title', 'N/A'),
+            'Title': paper.get('title') or 'N/A',
             'Year': paper.get('year', 'N/A'),
             'Journal': paper.get('journal', 'N/A'),
             'DOI': paper.get('doi', 'N/A'),
             'Relevance_Score': 0,
             'Is_Relevant': 'Error',
+            'Summary': 'ERROR during analysis',
+            'Relevance_Explanation': 'ERROR during analysis',
             'Organisms': 'ERROR',
             'Species': 'ERROR',
             'Strain_Variety': 'ERROR',
@@ -414,7 +420,7 @@ Examples:
     )
     
     parser.add_argument('input_json', nargs='?', help='Input JSON from Fetcher_NCBI')
-    parser.add_argument('output_csv', nargs='?', help='Output CSV file (optional, auto-generated if not provided)')
+    parser.add_argument('output_tsv', nargs='?', help='Output TSV file (optional, auto-generated if not provided)')
     parser.add_argument('--test-connection', action='store_true', help='Test Ollama connection and exit')
     
     args = parser.parse_args()
@@ -435,11 +441,11 @@ Examples:
         sys.exit(1)
     
     # Generate output path if not provided
-    if args.output_csv:
-        output_path = Path(args.output_csv)
+    if args.output_tsv:
+        output_path = Path(args.output_tsv)
     else:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_path = OUTPUT_DIR / f"classified_papers_{timestamp}.csv"
+        output_path = OUTPUT_DIR / f"classified_papers_{timestamp}.tsv"
     
     # Initialize Ollama client
     print("\n" + "=" * 80)

@@ -103,7 +103,7 @@ printf "${GREEN}[1/6] Select analysis mode${NC}\n"
 printf "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n\n"
 
 printf "  ${YELLOW}1)${NC} ${BLUE}Lite${NC} - Fast fetch only\n"
-printf "     ${CYAN}→${NC} Basic CSV/JSON output (PMID, title, abstract, DOI)\n"
+printf "     ${CYAN}→${NC} Basic TSV/JSON output (PMID, title, abstract, DOI)\n"
 printf "     ${CYAN}→${NC} Quick results for literature review\n\n"
 
 printf "  ${YELLOW}2)${NC} ${BLUE}Pro${NC}  - Full analysis with AI extraction\n"
@@ -131,7 +131,7 @@ case $ANALYSIS_MODE in
         fi
         
         # Check Ollama connection for Pro mode
-        if ! python3 -c "import sys; sys.path.insert(0, '$ROOT_DIR/Data_Analyzer'); from config import OLLAMA_URL; import requests; requests.get(OLLAMA_URL, timeout=2)" 2>/dev/null; then
+        if ! python3 -c "import sys; sys.path.insert(0, '$ROOT_DIR/Data_Analyzer'); from config import OLLAMA_BASE_URL; import requests; requests.get(OLLAMA_BASE_URL, timeout=2)" 2>/dev/null; then
             echo -e "${YELLOW}WARNING: Cannot connect to Ollama${NC}"
             read -r -p "Continue anyway? [y/N]: " CONTINUE
             CONTINUE=$(echo "$CONTINUE" | tr '[:upper:]' '[:lower:]')
@@ -177,28 +177,40 @@ printf "\n${GREEN}━━━━━━━━━━━━━━━━━━━━�
 printf "${GREEN}[3/6] Select database to search${NC}\n"
 printf "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n\n"
 
-printf "  ${YELLOW}1)${NC} ${BLUE}PubMed${NC} - Literature search\n"
-printf "     ${CYAN}→${NC} Fast: Search publications directly\n"
+printf "  ${YELLOW}1)${NC} ${BLUE}PubMed${NC} - Literature search (title/abstract)\n"
+printf "     ${CYAN}→${NC} Fast: Search titles and abstracts\n"
 printf "     ${CYAN}→${NC} Returns: Papers with PMID, abstract, metadata\n\n"
 
-printf "  ${YELLOW}2)${NC} ${BLUE}BioProject${NC} - Omics data search\n"
+printf "  ${YELLOW}2)${NC} ${BLUE}PMC${NC} - Full-text literature search\n"
+printf "     ${CYAN}→${NC} Searches entire article body (more results)\n"
+printf "     ${CYAN}→${NC} Returns: Papers with PMID, abstract, metadata\n\n"
+
+printf "  ${YELLOW}3)${NC} ${BLUE}BioProject${NC} - Omics data search\n"
 printf "     ${CYAN}→${NC} Slow: Full cascade linking (BioProject → SRA → PubMed)\n"
 printf "     ${CYAN}→${NC} Returns: Experiments + associated publications\n\n"
 
-read -r -p "Selection [1-2]: " DB_CHOICE
+read -r -p "Selection [1-3]: " DB_CHOICE
 
 case $DB_CHOICE in
     1)
         DATABASE="pubmed"
-        printf "\n  ✓ Selected: ${BLUE}PubMed${NC} (literature search)\n"
+        SEARCH_DB="pubmed"
+        printf "\n  ✓ Selected: ${BLUE}PubMed${NC} (title/abstract search)\n"
         ;;
     2)
+        DATABASE="pubmed"
+        SEARCH_DB="pmc"
+        printf "\n  ✓ Selected: ${BLUE}PMC${NC} (full-text search)\n"
+        ;;
+    3)
         DATABASE="bioproject"
+        SEARCH_DB="pubmed"
         printf "\n  ✓ Selected: ${BLUE}BioProject${NC} (omics data search with cascade)\n"
         ;;
     *)
         echo -e "${RED}ERROR: Invalid option. Using PubMed by default.${NC}"
         DATABASE="pubmed"
+        SEARCH_DB="pubmed"
         ;;
 esac
 
@@ -211,28 +223,36 @@ printf "${GREEN}[4/6] Generating boolean query with AI...${NC}\n"
 printf "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n\n"
 
 cd "$ROOT_DIR/Query_generator/phases/phase3"
-GEN_OUTPUT=$(python3 api/main.py --quick "$USER_INPUT" 2>/dev/null)
 
-echo "$GEN_OUTPUT"
+# Create a temporary file to capture the output while allowing interaction
+TEMP_GEN_OUTPUT=$(mktemp)
 
-# Extract the query
-QUERY=$(printf "%s\n" "$GEN_OUTPUT" | awk '/NCBI Query:/{getline; gsub(/^ +/, ""); print; exit}')
+# Export SEARCH_DB so the interactive CLI can adapt field tags for PMC
+export SEARCH_DB
+
+# Run main.py in interactive mode (default) and tee output to file
+# We don't use --quick to allow the new refinement loop
+python3 api/main.py "$USER_INPUT" 2>/dev/null | tee "$TEMP_GEN_OUTPUT"
+GEN_EXIT_CODE=${PIPESTATUS[0]}
+
+if [ $GEN_EXIT_CODE -ne 0 ]; then
+    echo -e "${RED}Generation cancelled or failed.${NC}"
+    rm "$TEMP_GEN_OUTPUT"
+    exit 1
+fi
+
+# Extract the LAST occurrence of the query from the log
+QUERY=$(grep "NCBI Query:" "$TEMP_GEN_OUTPUT" -A 1 | tail -n 1 | sed 's/^[[:space:]]*//')
+rm "$TEMP_GEN_OUTPUT"
 
 if [ -z "$QUERY" ]; then
     echo -e "${RED}ERROR: Could not extract query.${NC}"
     exit 1
 fi
 
-# Confirm query
-printf "\n${YELLOW}Generated NCBI query:${NC}\n"
-printf "${BLUE}%s${NC}\n\n" "$QUERY"
-
-read -r -p "Continue with this query? [Y/n]: " CONFIRM
-CONFIRM=$(echo "$CONFIRM" | tr '[:upper:]' '[:lower:]')
-
-if [ "$CONFIRM" = "n" ] || [ "$CONFIRM" = "no" ]; then
-    echo -e "${RED}Cancelled by user.${NC}"
-    exit 0
+# If PMC selected, ensure field tags are converted (safety net)
+if [ "$SEARCH_DB" = "pmc" ]; then
+    QUERY=$(echo "$QUERY" | sed 's/\[Organism\]/[all]/g' | sed 's/\[All Fields\]/[all]/g')
 fi
 
 # ================================================================
@@ -278,18 +298,23 @@ if [ "$DATABASE" = "pubmed" ]; then
     # PubMed Direct Search
     # ============================================================
     
-    FETCH_CSV="$OUTPUT_DIR/pubmed_fetch_${TIMESTAMP}.csv"
+    FETCH_TSV="$OUTPUT_DIR/pubmed_fetch_${TIMESTAMP}.tsv"
     FETCH_JSON="$OUTPUT_DIR/pubmed_fetch_${TIMESTAMP}.json"
     
-    printf "${CYAN}[Fetcher]${NC} Searching PubMed...\n\n"
+    if [ "$SEARCH_DB" = "pmc" ]; then
+        printf "${CYAN}[Fetcher]${NC} Searching PMC (full-text)...\n\n"
+    else
+        printf "${CYAN}[Fetcher]${NC} Searching PubMed...\n\n"
+    fi
     
     python3 pubmed_boolean_search.py "$QUERY" \
         --max "$MAX_RESULTS" \
-        --output-csv "$FETCH_CSV" \
+        --db "$SEARCH_DB" \
+        --output-tsv "$FETCH_TSV" \
         --output-json "$FETCH_JSON"
     
     printf "\n${GREEN}✓ Fetch completed${NC}\n"
-    printf "  📄 CSV:  %s\n" "$FETCH_CSV"
+    printf "  📄 TSV:  %s\n" "$FETCH_TSV"
     printf "  📄 JSON: %s\n" "$FETCH_JSON"
     
     # If Pro mode, run Data Analyzer
@@ -297,12 +322,12 @@ if [ "$DATABASE" = "pubmed" ]; then
         printf "\n${CYAN}[Data Analyzer]${NC} Running AI analysis with Ollama...\n\n"
         
         cd "$ROOT_DIR/Data_Analyzer"
-        ANALYSIS_CSV="$OUTPUT_DIR/classified_papers_${TIMESTAMP}.csv"
+        ANALYSIS_TSV="$OUTPUT_DIR/classified_papers_${TIMESTAMP}.tsv"
         
-        python3 paper_analyzer.py "$FETCH_JSON" "$ANALYSIS_CSV"
+        python3 paper_analyzer.py "$FETCH_JSON" "$ANALYSIS_TSV"
         
         printf "\n${GREEN}✓ Analysis completed${NC}\n"
-        printf "  📊 Classified: %s\n" "$ANALYSIS_CSV"
+        printf "  📊 Classified TSV: %s\n" "$ANALYSIS_TSV"
     fi
 
 elif [ "$DATABASE" = "bioproject" ]; then
@@ -310,18 +335,18 @@ elif [ "$DATABASE" = "bioproject" ]; then
     # BioProject Cascade Search
     # ============================================================
     
-    FETCH_CSV="$OUTPUT_DIR/bioproject_fetch_${TIMESTAMP}.csv"
+    FETCH_TSV="$OUTPUT_DIR/bioproject_fetch_${TIMESTAMP}.tsv"
     FETCH_JSON="$OUTPUT_DIR/bioproject_fetch_${TIMESTAMP}.json"
     
     printf "${CYAN}[Fetcher]${NC} Executing cascade workflow (BioProject → SRA → PubMed)...\n\n"
     
     python3 boolean_fetcher_integrated.py "$QUERY" \
         --max "$MAX_RESULTS" \
-        --output-csv "$FETCH_CSV" \
+        --output-tsv "$FETCH_TSV" \
         --output-json "$FETCH_JSON"
     
     printf "\n${GREEN}✓ Fetch completed${NC}\n"
-    printf "  📄 CSV:  %s\n" "$FETCH_CSV"
+    printf "  📄 TSV:  %s\n" "$FETCH_TSV"
     printf "  📄 JSON: %s\n" "$FETCH_JSON"
     
     # If Pro mode, run Data Analyzer
@@ -329,12 +354,12 @@ elif [ "$DATABASE" = "bioproject" ]; then
         printf "\n${CYAN}[Data Analyzer]${NC} Running AI analysis with Ollama...\n\n"
         
         cd "$ROOT_DIR/Data_Analyzer"
-        ANALYSIS_CSV="$OUTPUT_DIR/classified_papers_${TIMESTAMP}.csv"
+        ANALYSIS_TSV="$OUTPUT_DIR/classified_papers_${TIMESTAMP}.tsv"
         
-        python3 paper_analyzer.py "$FETCH_JSON" "$ANALYSIS_CSV"
+        python3 paper_analyzer.py "$FETCH_JSON" "$ANALYSIS_TSV"
         
         printf "\n${GREEN}✓ Analysis completed${NC}\n"
-        printf "  📊 Classified: %s\n" "$ANALYSIS_CSV"
+        printf "  📊 Classified TSV: %s\n" "$ANALYSIS_TSV"
     fi
 fi
 
@@ -355,12 +380,12 @@ printf "${BLUE}Database:${NC} %s\n\n" "$DATABASE"
 printf "${YELLOW}Output files in: %s${NC}\n\n" "$OUTPUT_DIR"
 
 if [ "$MODE" = "lite" ]; then
-    printf "  📄 Fetch CSV:  $(basename "$FETCH_CSV")\n"
+    printf "  📄 Fetch TSV:  $(basename "$FETCH_TSV")\n"
     printf "  📄 Fetch JSON: $(basename "$FETCH_JSON")\n"
 else
-    printf "  📄 Fetch CSV:       $(basename "$FETCH_CSV")\n"
+    printf "  📄 Fetch TSV:       $(basename "$FETCH_TSV")\n"
     printf "  📄 Fetch JSON:      $(basename "$FETCH_JSON")\n"
-    printf "  📊 Classified CSV:  $(basename "$ANALYSIS_CSV")\n"
+    printf "  📊 Classified TSV:  $(basename "$ANALYSIS_TSV")\n"
 fi
 
 printf "\n${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n\n"

@@ -312,10 +312,13 @@ def generate_query_cli(user_input: str, use_llm: bool = True, interactive: bool 
     ollama_client = OllamaClient() if use_llm else None
     
     if interactive:
-        # Interactive mode with learning
+        # Interactive mode with refinement loop
         generator = InteractiveQueryGenerator(kb_path, ollama_client, cache_dir=cache_dir)
-        generator.run_interactive(user_input)
-        generator.show_statistics()
+        satisfied = generator.run_interactive(user_input)
+        if not satisfied:
+            print("\n❌ Operation cancelled by user.")
+            sys.exit(1)
+        # generator.show_statistics() # Optional, maybe too much noise
     else:
         # Quick mode without interaction
         query_cache_path = OUTPUT_DIR.parent.parent / "phase2" / "data" / "query_cache.json"
@@ -342,6 +345,7 @@ def generate_query_cli(user_input: str, use_llm: bool = True, interactive: bool 
             print(f"   Organism:    (none)")
         
         print(f"   Strategies:  {', '.join(result['extracted']['strategies']) or 'None'}")
+        print(f"   Genes:       {', '.join(result['extracted']['genes']) or 'None'}")
         print(f"   Tissues:     {', '.join(result['extracted']['tissues']) or 'None'}")
         print(f"   Conditions:  {', '.join(result['extracted']['conditions']) or 'None'}")
         print(f"   Keywords:    {', '.join(result['extracted']['free_terms']) or 'None'}")
@@ -354,6 +358,7 @@ def generate_query_cli(user_input: str, use_llm: bool = True, interactive: bool 
         print(f"\n🔗 Synonyms:")
         print(f"   Organism:    {org_syn}")
         print(f"   Strategies:  {strat_syn}")
+        print(f"   Genes:       {', '.join(syn.get('genes', []) or []) or 'None'}")
         print(f"   Tissues:     {tissue_syn}")
         print(f"   Conditions:  {cond_syn}")
         if result.get('clarification_needed'):
@@ -362,7 +367,9 @@ def generate_query_cli(user_input: str, use_llm: bool = True, interactive: bool 
             print("\n" + "="*80)
             print("❓ Try adding a condition, tissue, or strategy")
             print("="*80 + "\n")
-        else:
+            
+        # Always show query if available
+        if result.get('ncbi_query'):
             print(f"\n✅ NCBI Query:")
             print(f"   {result['ncbi_query']}")
             print("\n" + "="*80)

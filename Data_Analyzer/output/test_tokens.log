@@ -1,0 +1,54 @@
+Could not load NCBI credentials from Fetcher_NCBI/config.py
+2026-02-13 15:39:05,186 - INFO - Loading fetcher output: test_tokens.json
+2026-02-13 15:39:05,186 - INFO - Loaded 1 papers
+2026-02-13 15:39:05,186 - INFO - User query: ("Solanum lycopersicum"[Organism] OR "tomato"[All Fields] OR "tomate"[All Fields] OR "sollanum"[All Fields]) AND ("RNA-Seq"[All Fields] OR "rnaseq"[All Fields] OR "rna seq"[All Fields] OR "rna sequenc...
+2026-02-13 15:39:05,186 - INFO - ================================================================================
+2026-02-13 15:39:05,186 - INFO - Starting paper analysis with Ollama...
+2026-02-13 15:39:05,186 - INFO - ================================================================================
+2026-02-13 15:39:05,186 - INFO - 
+[1/1] Analyzing: 41068586
+2026-02-13 15:39:05,186 - INFO -    Title: Transcriptome-based meta-analysis of drought stress regulatory genes in tomato....
+2026-02-13 15:39:05,186 - INFO -    → Fetching full text from PMC: PMC12513158
+2026-02-13 15:39:05,186 - INFO - Fetching full text from PMC: PMC12513158
+2026-02-13 15:39:06,568 - INFO - ✓ Successfully fetched full text for PMC12513158
+2026-02-13 15:39:06,569 - INFO -    ✓ Using PMC full text (4623 chars)
+2026-02-13 15:39:06,569 - INFO - Prompt length: 17551 chars, timeout: 526s
+2026-02-13 15:39:06,569 - INFO - Calling Ollama API: http://localhost:11434/api/generate
+2026-02-13 15:39:25,164 - INFO -    📊 Token usage: Prompt=4096, Response=498, Total=4594
+2026-02-13 15:39:25,164 - INFO -    ⏱️  Generation time: 15239ms (32.7 tokens/sec)
+2026-02-13 15:39:25,166 - INFO -    ℹ Enhanced techniques: ['Microarray', 'Sequencing']
+2026-02-13 15:39:25,167 - INFO -    ✓ Relevance: 8/10
+2026-02-13 15:39:25,167 - INFO -    ✓ Organisms: Solanum lycopersicum ; not described
+2026-02-13 15:39:25,167 - INFO -    ✓ Tissues_Organs: leaf ; root
+2026-02-13 15:39:25,167 - INFO -    ✓ Conditions: drought stress
+2026-02-13 15:39:25,167 - INFO - 
+Saving results to: test_tokens_output.csv
+2026-02-13 15:39:25,167 - INFO - ✓ Saved 1 classified papers
+✅ Data Analyzer Config loaded
+   Ollama: http://localhost:11434/qwen2.5:14b
+   Output: /mnt/64274670-793f-4763-b132-b5c7b1178bb0/lahumada/Pyner_PGRLAB/Data_Analyzer/output
+
+================================================================================
+PAPER ANALYZER - Powered by Ollama
+================================================================================
+✓ Ollama connected
+✓ Model: qwen2.5:14b
+
+================================================================================
+ANALYSIS STATISTICS
+================================================================================
+Total papers:        1
+Successfully analyzed: 1
+Relevant papers:     1 (100.0%)
+Analysis errors:     0
+PMC full text used: 1
+Abstract only:       0
+Techniques enhanced: 1 (found via text search)
+================================================================================
+
+✓ ANALYSIS COMPLETE
+  Input:  test_tokens.json
+  Output: test_tokens_output.csv
+  Log:    /mnt/64274670-793f-4763-b132-b5c7b1178bb0/lahumada/Pyner_PGRLAB/Data_Analyzer/logs/analyzer_20260213_153905.log
+================================================================================
+

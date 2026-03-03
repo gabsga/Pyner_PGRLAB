@@ -139,10 +139,14 @@ YOUR TASK - Extract comprehensive experimental metadata:
 44. DIFFERENTIAL_EXPRESSION_THRESHOLD: Cutoff criteria if applicable (e.g., "log2FC > 1.5, p < 0.05")
 
 45. RAW_DATA_AVAILABLE: Are raw data available? "Yes", "No", or "not mentioned"
+46. SUMMARY: Provide a concise 2-3 sentence summary of the paper's main findings and objectives.
+47. RELEVANCE_EXPLANATION: Specifically explain why this paper is relevant (or not) to the USER QUERY. If the gene/target mentioned in the query is only mentioned tangentially, explain that here.
 
 RESPONSE FORMAT (JSON only, no explanation):
 {{
   "relevance_score": <0-10>,
+  "summary": "concise paper summary",
+  "relevance_explanation": "how it connects to user query",
   "organisms": ["organism1", "organism2"],
   "species": "primary species",
   "strain_variety": "strain or cultivar",
@@ -186,7 +190,9 @@ RESPONSE FORMAT (JSON only, no explanation):
   "normalization_method": "normalization approach",
   "statistical_method": "statistical tests",
   "differential_expression_threshold": "cutoff criteria",
-  "raw_data_available": "Yes or No"
+  "raw_data_available": "Yes or No",
+  "summary": "2-3 sentence summary",
+  "relevance_explanation": "connection to user query"
 }}
 
 IMPORTANT RULES:
@@ -225,6 +231,7 @@ JSON:"""
         }
         
         logger.info(f"Calling Ollama API: {url}")
+        logger.info(f"   ⏳ Waiting for Ollama response (this may take a few minutes for large papers)...")
         response = requests.post(url, json=payload, timeout=timeout)
         response.raise_for_status()
         
@@ -260,8 +267,10 @@ JSON:"""
             
             # Validate and sanitize - all fields with defaults for expandedMetadata extraction
             result = {
-                # Basic fields (original)
+                # Relevance
                 'relevance_score': int(parsed.get('relevance_score', 0)),
+                'summary': parsed.get('summary', 'not described'),
+                'relevance_explanation': parsed.get('relevance_explanation', 'not described'),
                 'organisms': parsed.get('organisms', []),
                 
                 # Organism Details (NEW)
@@ -360,6 +369,8 @@ JSON:"""
         return {
             # Relevance
             'relevance_score': 0,
+            'summary': 'not described',
+            'relevance_explanation': 'not described',
             
             # Organisms
             'organisms': [],

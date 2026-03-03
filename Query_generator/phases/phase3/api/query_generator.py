@@ -58,25 +58,113 @@ SPANISH_TO_EN = {
 }
 
 
+# Noise words to ignore in keywords and free terms
+GLOBAL_NOISE_WORDS = {
+    # English
+    'find', 'targets', 'look', 'for', 'please', 'search', 'data', 'genomic', 
+    'want', 'show', 'results', 'help', 'lookup', 'paper', 'papers', 'study',
+    'related', 'about', 'information', 'describe', 'provide', 'list',
+    # Spanish
+    'encontrar', 'buscar', 'targets', 'para', 'por', 'favor', 'datos', 
+    'genómicos', 'genomicos', 'quiero', 'mostrar', 'resultados', 'ayuda',
+    'información', 'informacion', 'artículo', 'articulos', 'estudio',
+    'relacionados', 'sobre', 'acerca', 'lista', 'gen', 'genes'
+}
+
+
+def _load_gene_aliases_from_tsv(tsv_path: Path) -> Dict[str, List[str]]:
+    """
+    Parse a gene annotation TSV file and return a gene aliases dict.
+    
+    Expected format (tab-separated, no header):
+        Column 1: Gene ID (e.g., Solyc01g008950)
+        Column 2: Symbol (e.g., SlCaM1)
+        Column 3: Full name (e.g., Calmodulin 1)
+    
+    Returns:
+        dict: {lowercase_term: [term1, term2, ...]}
+    """
+    from collections import defaultdict
+    import csv as csv_mod
+    
+    gene_groups = defaultdict(set)
+    try:
+        with open(tsv_path, 'r', encoding='utf-8') as f:
+            reader = csv_mod.reader(f, delimiter='\t')
+            for row in reader:
+                if len(row) < 3:
+                    continue
+                gene_id = row[0].strip()
+                symbol = row[1].strip()
+                name = row[2].strip()
+                if not gene_id or not symbol:
+                    continue
+                gene_groups[gene_id].add(gene_id)
+                gene_groups[gene_id].add(symbol)
+                if name and name != symbol:
+                    gene_groups[gene_id].add(name)
+    except Exception as e:
+        logger.warning(f"⚠️ Error loading gene aliases from {tsv_path}: {e}")
+        return {}
+    
+    aliases = {}
+    for gene_id, terms in gene_groups.items():
+        term_list = sorted(terms)
+        for term in terms:
+            key = term.lower()
+            if key not in aliases:
+                aliases[key] = term_list
+            else:
+                existing = set(aliases[key])
+                existing.update(term_list)
+                aliases[key] = sorted(existing)
+    
+    return aliases
+
+
 def load_technical_vocabulary(cache_dir: Path) -> Dict:
-    """Load technical vocabulary from JSON file"""
+    """Load technical vocabulary from JSON file and gene alias TSV files"""
     vocab_path = cache_dir / "technical_vocabulary.json"
+    vocab = None
     if vocab_path.exists():
         try:
             with open(vocab_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                vocab = json.load(f)
         except Exception as e:
             logger.warning(f"⚠️ Error loading technical vocabulary: {e}")
-    return {
-        "plant_tissues": [],
-        "animal_tissues": [],
-        "generic_tissues": [],
-        "process_keywords": [],
-        "organism_markers": {"plant": {"markers": []}, "animal": {"markers": []}, 
-                            "microbe": {"markers": []}, "virus": {"markers": []}},
-        "organism_aliases": {},
-        "strategy_keywords": {}
-    }
+    
+    if vocab is None:
+        vocab = {
+            "plant_tissues": [],
+            "animal_tissues": [],
+            "generic_tissues": [],
+            "process_keywords": [],
+            "organism_markers": {"plant": {"markers": []}, "animal": {"markers": []}, 
+                                "microbe": {"markers": []}, "virus": {"markers": []}},
+            "organism_aliases": {},
+            "strategy_keywords": {},
+            "gene_aliases": {}
+        }
+    
+    # Load organism-specific gene alias files (gene_aliases_*.tab)
+    # Search in support_dictionary and project root
+    gene_aliases = vocab.get("gene_aliases", {})
+    search_dirs = [cache_dir]
+    
+    # Also search in the project root (4 levels up from support_dictionary)
+    project_root = cache_dir.parent.parent.parent.parent
+    if project_root.exists() and project_root != cache_dir:
+        search_dirs.append(project_root)
+    
+    for search_dir in search_dirs:
+        for tsv_file in sorted(search_dir.glob("gene_aliases_*.tab")):
+            logger.info(f"📖 Loading gene aliases from: {tsv_file.name}")
+            organism_aliases = _load_gene_aliases_from_tsv(tsv_file)
+            gene_aliases.update(organism_aliases)
+            logger.info(f"   ✓ Loaded {len(organism_aliases)} gene alias entries")
+    
+    vocab["gene_aliases"] = gene_aliases
+    return vocab
 
 
 class KnowledgeBaseValidator:
@@ -91,6 +179,7 @@ class KnowledgeBaseValidator:
         self.sources = set()
         self.selections = set()
         self.diseases = set()
+        self.gene_aliases = {}
         
         # Load technical vocabulary
         self.vocab = load_technical_vocabulary(self.cache_dir)
@@ -98,6 +187,7 @@ class KnowledgeBaseValidator:
         self.animal_tissues = set(self.vocab.get("animal_tissues", []))
         self.generic_tissues = set(self.vocab.get("generic_tissues", []))
         self.process_keywords = set(self.vocab.get("process_keywords", []))
+        self.gene_aliases = self.vocab.get("gene_aliases", {})
         self.organism_aliases = self.vocab.get("organism_aliases", {})
         self.strategy_keywords = self.vocab.get("strategy_keywords", {})
         
@@ -236,6 +326,20 @@ class KnowledgeBaseValidator:
         
         return variants
 
+    def find_genes(self, text: str) -> Dict[str, List[str]]:
+        """Buscar genes y sus alias en el texto"""
+        text_lower = text.lower()
+        found = {}
+        for gene_key, aliases in self.gene_aliases.items():
+            # Match gene key or any of its aliases
+            gene_terms = [gene_key] + aliases
+            for term in gene_terms:
+                if re.search(rf"\b{re.escape(term.lower())}\b", text_lower):
+                    if gene_key not in found:
+                        found[gene_key] = aliases
+                    break
+        return found
+
     def find_tissues(self, text: str, tissue_vocab: Dict[str, str]) -> List[str]:
         text_lower = text.lower()
         found = []
@@ -304,14 +408,16 @@ class KnowledgeBaseValidator:
         organism_synonyms: List[str] = None,
         strategy_synonyms: List[str] = None,
         tissue_synonyms: List[str] = None,
-        condition_synonyms: List[str] = None
+        condition_synonyms: List[str] = None,
+        gene_synonyms: List[str] = None
     ) -> List[str]:
-        """Extraer términos libres (no organismos ni estrategias)"""
+        """Extraer términos libres (no organismos ni estrategias ni genes)"""
         terms = []
         organism_synonyms = organism_synonyms or []
         strategy_synonyms = strategy_synonyms or []
         tissue_synonyms = tissue_synonyms or []
         condition_synonyms = condition_synonyms or []
+        gene_synonyms = gene_synonyms or []
         
         # Remover organismo del texto
         text_clean = text
@@ -354,14 +460,19 @@ class KnowledgeBaseValidator:
             text_clean = text_clean.replace(syn, '')
             text_clean = text_clean.replace(syn.lower(), '')
         
-        # Extraer palabras clave (stopwords eliminadas)
+        # Remover sinónimos de genes
+        for syn in gene_synonyms:
+            text_clean = text_clean.replace(syn, '')
+            text_clean = text_clean.replace(syn.lower(), '')
+        
+        # Extraer palabras clave (usando GLOBAL_NOISE_WORDS como base)
         stopwords = {
             'and', 'or', 'the', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by',
             'using', 'studies', 'study', 'research', 'analysis', 'sequencing',
-            'sequence', 'whole', 'single', 'cell', 'data', 'information',
-            'quiero', 'buscar', 'informacion', 'información', 'sobre', 'acerca',
-            'datos', 'estudio', 'estudios', 'trabajo', 'trabajos'
+            'sequence', 'whole', 'single', 'cell', 'data', 'information', 'para',
+            'de', 'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas'
         }
+        stopwords.update(GLOBAL_NOISE_WORDS)
         words = re.findall(r'\b\w+\b', text_clean.lower())
         
         for word in words:
@@ -390,6 +501,7 @@ class NCBIQueryBuilder:
         conditions: List[str] = None,
         tissue_synonyms: List[str] = None,
         condition_synonyms: List[str] = None,
+        genes: Dict[str, List[str]] = None,
         use_llm: bool = True
     ) -> str:
         """
@@ -439,6 +551,10 @@ class NCBIQueryBuilder:
         for term in strategies + strategy_synonyms + tissues + tissue_synonyms + conditions + condition_synonyms:
             if term:
                 exclude_terms.add(term.lower())
+        
+        # Add generic noise words to exclude
+        for word in GLOBAL_NOISE_WORDS:
+            exclude_terms.add(word)
 
         filtered_free = []
         for term in free_terms:
@@ -480,6 +596,22 @@ class NCBIQueryBuilder:
             else:
                 cond_query = ' OR '.join([f'"{c}"[All Fields]' for c in combined_condition_terms])
                 query_parts.append(f'({cond_query})')
+
+        # Genes — deduplicate: multiple keys may point to the same gene alias set
+        seen_gene_sets = set()
+        for gene_key, aliases in genes.items():
+            if aliases:
+                # Use frozenset to identify unique gene groups
+                alias_key = frozenset(a.lower() for a in aliases)
+                if alias_key in seen_gene_sets:
+                    continue  # Skip duplicate gene group
+                seen_gene_sets.add(alias_key)
+                gene_query = ' OR '.join([f'"{a}"[All Fields]' for a in aliases])
+                query_parts.append(f'({gene_query})')
+            else:
+                if gene_key.lower() not in seen_gene_sets:
+                    seen_gene_sets.add(frozenset([gene_key.lower()]))
+                    query_parts.append(f'"{gene_key}"[All Fields]')
 
         # Términos libres
         for term in filtered_free:
@@ -700,22 +832,24 @@ class QueryGeneratorService:
 User Query: "{user_input}"
 
 Extract these fields and return ONLY valid JSON (no markdown, no text):
-- organism: (string) scientific name or null
+- organism: (string) scientific name or null (e.g., "Arabidopsis thaliana")
+- genes: (list) specific gene names (e.g., "myb60", "brca1")
 - tissues: (list) body parts or tissues in ENGLISH
 - conditions: (list) stress/disease/process in ENGLISH  
 - strategies: (list) sequencing methods (RNA-Seq, ChIP-Seq, WGS, etc.)
-- keywords: (list) other important terms in ENGLISH
+- keywords: (list) other important scientific terms in ENGLISH
 
 Strict Rules:
-1. TRANSLATE ALL Spanish to ENGLISH in all outputs
+1. TRANSLATE ALL Spanish to ENGLISH in all outputs (except gene names)
 2. Use standardized scientific terms (e.g., "raíz"→"root", "sequía"→"drought")
-3. Do NOT invent organisms - leave null if unsure
-4. Tissues: leaf, root, flower, stem, liver, brain, heart, kidney, etc.
-5. Conditions: drought, stress, disease, heat, cold, growth, infection, etc.
-6. Return ONLY valid JSON, no extra text
+3. IGNORE generic filler words like "find", "search", "lookup", "targets", "look", "for", "please", "want", "help", "show", "data", "genomic", "results"
+4. Do NOT invent organisms - leave null if unsure
+5. Tissues: leaf, root, flower, stem, liver, brain, heart, kidney, etc.
+6. Conditions: drought, stress, disease, heat, cold, growth, infection, etc.
+7. Return ONLY valid JSON, no extra text
 
-Example Input: "datos genómicos de raices de arabidopsis en sequia"
-Example Output: {{"organism": "Arabidopsis thaliana", "tissues": ["root"], "conditions": ["drought"], "strategies": [], "keywords": ["genomic"]}}"""
+Example Input: "quiero encontrar los targets de arabidopsis en sequía para el gen myb60"
+Example Output: {{"organism": "Arabidopsis thaliana", "genes": ["myb60"], "tissues": [], "conditions": ["drought"], "strategies": [], "keywords": []}}"""
 
         try:
             raw = self.ollama_client.generate(prompt)
@@ -730,11 +864,15 @@ Example Output: {{"organism": "Arabidopsis thaliana", "tissues": ["root"], "cond
                 data = json.loads(match.group(0))
                 result = {
                     'organism': data.get('organism'),
+                    'genes': [g for g in (data.get('genes') or [])],
                     'tissues': [t.lower() if isinstance(t, str) else t for t in (data.get('tissues') or [])],
                     'conditions': [c.lower() if isinstance(c, str) else c for c in (data.get('conditions') or [])],
                     'strategies': [s for s in (data.get('strategies') or [])],
                     'keywords': [k.lower() if isinstance(k, str) else k for k in (data.get('keywords') or [])],
                 }
+                # Final check for noise in all categorical fields that might contain filler
+                result['keywords'] = [k for k in result['keywords'] if k.lower() not in GLOBAL_NOISE_WORDS]
+                
                 logger.info(f"✅ LLM extraction: {result}")
                 return result
             except json.JSONDecodeError as e:
@@ -744,7 +882,52 @@ Example Output: {{"organism": "Arabidopsis thaliana", "tissues": ["root"], "cond
             logger.warning(f"⚠️ LLM extraction error: {e}")
             return {}
     
-    def generate_query(self, user_input: str, use_llm: bool = True) -> Dict:
+    def refine_query(self, previous_result: Dict, feedback: str) -> Dict:
+        """Refine extraction results based on user feedback"""
+        logger.info(f"🔄 Refining query with feedback: {feedback}")
+        
+        current_extracted = previous_result.get('extracted', {})
+        
+        prompt = f"""You are refining biological search results based on user feedback.
+Current Extraction:
+{json.dumps(current_extracted, indent=2)}
+
+User Feedback: "{feedback}"
+
+ADJUST the extraction based on the feedback and return ONLY the updated JSON.
+Rules:
+1. Maintain the JSON structure (organism, genes, tissues, conditions, strategies, keywords)
+2. If the user asks to remove a word, remove it from the corresponding list.
+3. If the user asks to add a term, translate it to English and add it to the correct category.
+4. Keep other terms that were not mentioned in feedback.
+5. NO noise words like "find", "targets", "for".
+6. Return ONLY valid JSON.
+
+Updated JSON:"""
+        
+        try:
+            raw = self.ollama_client.generate(prompt).strip()
+            match = re.search(r"\{.*\}", raw, re.DOTALL)
+            if not match:
+                return previous_result # Return original if LLM failed
+                
+            updated_data = json.loads(match.group(0))
+            
+            # Apply GLOBAL_NOISE_WORDS to the updated JSON as well
+            if 'keywords' in updated_data:
+                updated_data['keywords'] = [k for k in updated_data['keywords'] if k.lower() not in GLOBAL_NOISE_WORDS]
+            
+            # Re-run full generation pipeline with these manual overrides
+            return self.generate_query(
+                previous_result['user_input'], 
+                use_llm=True, 
+                overrides=updated_data
+            )
+        except Exception as e:
+            logger.error(f"⚠️ Query refinement failed: {e}")
+            return previous_result
+
+    def generate_query(self, user_input: str, use_llm: bool = True, overrides: Dict = None) -> Dict:
         """
         Generar query NCBI desde input en lenguaje natural
         
@@ -759,7 +942,10 @@ Example Output: {{"organism": "Arabidopsis thaliana", "tissues": ["root"], "cond
         logger.info(f"📝 Processing user input: {user_input}")
         
         # Paso 1: Extraer con LLM (si esta disponible)
-        llm_data = self._extract_with_llm(user_input) if use_llm else {}
+        if use_llm and not overrides:
+            llm_data = self._extract_with_llm(user_input)
+        else:
+            llm_data = overrides or {}
 
         # Paso 2: Buscar organismo con todas sus variantes
         organism_variants = self.validator.find_organism_variants(user_input)
@@ -809,11 +995,27 @@ Example Output: {{"organism": "Arabidopsis thaliana", "tissues": ["root"], "cond
         logger.info(f"🔍 Tissues found: {tissues or 'None'}")
         logger.info(f"🔍 Conditions found: {conditions or 'None'}")
 
+        # Paso 4.2: Buscar genes
+        genes = self.validator.find_genes(user_input)
+        llm_genes = llm_data.get('genes', []) if use_llm else []
+        for g in llm_genes:
+            g_lower = g.lower()
+            if g_lower not in genes:
+                # Si el LLM encontró un gen que no está en el dict, añadirlo sin alias
+                genes[g_lower] = []
+        logger.info(f"🔍 Genes found: {list(genes.keys()) or 'None'}")
+
         # Paso 4.5: Recolectar sinónimos ANTES de extraer términos libres
         organism_synonyms = self._collect_organism_synonyms(organism)
         strategy_synonyms = self._collect_strategy_synonyms(strategies)
         tissue_synonyms = self._collect_tissue_synonyms(tissues)
         condition_synonyms = self._collect_condition_synonyms(conditions)
+        
+        gene_synonyms = []
+        for aliases in genes.values():
+            for alias in aliases:
+                if alias not in gene_synonyms:
+                    gene_synonyms.append(alias)
 
         # Paso 5: Extraer términos libres (eliminando también sinónimos)
         free_terms = self.validator.extract_free_terms(
@@ -821,7 +1023,8 @@ Example Output: {{"organism": "Arabidopsis thaliana", "tissues": ["root"], "cond
             organism_synonyms=organism_synonyms,
             strategy_synonyms=strategy_synonyms,
             tissue_synonyms=tissue_synonyms,
-            condition_synonyms=condition_synonyms
+            condition_synonyms=condition_synonyms,
+            gene_synonyms=gene_synonyms
         )
         # Traducir y usar el set de keywords del LLM para deduplicar
         free_terms = self._normalize_terms(free_terms)
@@ -869,10 +1072,20 @@ Example Output: {{"organism": "Arabidopsis thaliana", "tissues": ["root"], "cond
             if strat:
                 exclude_llm_keywords.add(strat.lower())
         
-        # Excluir también TODOS los alias de organismos (términos que apuntan a organismos)
+        # Excluir genes identificados y sus sinónimos
+        for gene in genes.keys():
+            exclude_llm_keywords.add(gene.lower())
+        for syn in gene_synonyms:
+            exclude_llm_keywords.add(syn.lower())
+
+        # Excluir tambíen TODOS los alias de organismos (términos que apuntan a organismos)
         for alias in self.validator.organism_aliases.keys():
             if alias:
                 exclude_llm_keywords.add(alias.lower())
+        
+        # Excluir GLOBAL_NOISE_WORDS para asegurar que no se filtren
+        for noise in GLOBAL_NOISE_WORDS:
+            exclude_llm_keywords.add(noise.lower())
         
         # No incluir keywords que el LLM ya extrajo o que pertenecen a categorias conocidas
         filtered_keywords = []
@@ -947,31 +1160,19 @@ Example Output: {{"organism": "Arabidopsis thaliana", "tissues": ["root"], "cond
                         'clarification_message': clarification
                     }
         
-        # If query is too general, ask for more specificity
+        # If query is too general, prepare clarification but continue
         needs_clarification = (
-            (organism is None and not strategies) or
-            (organism is not None and not strategies and not free_terms and not tissues and not conditions)
+            (organism is None and not strategies and not genes) or
+            (organism is not None and not strategies and not free_terms and not tissues and not conditions and not genes)
         )
+        clarification_message = ""
         if needs_clarification:
-            clarification = (
+            clarification_message = (
                 "Your query is too general. Please specify an organism "
                 "(e.g., Arabidopsis thaliana), a condition (e.g., drought stress), "
                 "a tissue (e.g., leaf), or a strategy (e.g., RNA-Seq, ChIP-Seq)."
             )
             logger.info("⚠️ Clarification needed: general query")
-            return {
-                'user_input': user_input,
-                'extracted': {
-                    'organism': organism,                    'organism_variants': organism_variants,                    'strategies': strategies,
-                    'tissues': tissues,
-                    'conditions': conditions,
-                    'free_terms': free_terms
-                },
-                'ncbi_query': "",
-                'ready_to_use': False,
-                'clarification_needed': True,
-                'clarification_message': clarification
-            }
 
         # Paso 6: Generar query booleana
         ncbi_query = self.query_builder.build_query(
@@ -984,6 +1185,7 @@ Example Output: {{"organism": "Arabidopsis thaliana", "tissues": ["root"], "cond
             conditions=conditions,
             tissue_synonyms=tissue_synonyms,
             condition_synonyms=condition_synonyms,
+            genes=genes,
             use_llm=use_llm
         )
 
@@ -997,16 +1199,18 @@ Example Output: {{"organism": "Arabidopsis thaliana", "tissues": ["root"], "cond
                 'strategies': strategies,
                 'tissues': tissues,
                 'conditions': conditions,
+                'genes': list(genes.keys()),
                 'free_terms': free_terms
             },
             'synonyms': {
                 'organism': organism_synonyms,
                 'strategies': strategy_synonyms,
                 'tissues': tissue_synonyms,
-                'conditions': condition_synonyms
+                'conditions': condition_synonyms,
+                'genes': gene_synonyms
             },
             'ncbi_query': ncbi_query,
             'ready_to_use': True,
-            'clarification_needed': False,
-            'clarification_message': ""
+            'clarification_needed': needs_clarification,
+            'clarification_message': clarification_message
         }

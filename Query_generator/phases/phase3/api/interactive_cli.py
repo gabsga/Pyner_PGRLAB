@@ -4,6 +4,8 @@ Interactive CLI for Query Generator
 User interaction flow: generate → validate → correct → learn
 """
 
+import os
+import re
 import sys
 import logging
 from pathlib import Path
@@ -23,49 +25,55 @@ class InteractiveQueryGenerator:
     
     def run_interactive(self, user_input: str) -> bool:
         """
-        Run query generation in interactive mode
-        
-        Flow:
-        1. Generate query
-        2. Display results and return query (no satisfaction prompt)
-        
-        Returns:
-            True if user is satisfied with final query
+        Run query generation in interactive mode with refinement loop
         """
         
         print("\n" + "="*80)
         print("🔍 PYNER QUERY GENERATOR")
         print("="*80)
         print("I turn natural language into NCBI SRA boolean queries.")
-        print("Try adding organism + strategy + tissue/condition for best results.")
-        print("Suggestions:")
-        print("  - Arabidopsis thaliana drought stress RNA-Seq")
-        print("  - Mus musculus liver transcriptome")
-        print("  - rice root heat stress")
         print("="*80)
         
-        # Paso 1: Generar query inicial
+        # Initial step
         result = self.service.generate_query(user_input, use_llm=True)
         
-        # Show if clarification is needed
-        if result.get('clarification_needed'):
-            print(f"\n⚠️ Need more details:")
-            print(f"   {result.get('clarification_message', '')}")
-            return False
-        
-        # Mostrar extracción
-        self._print_extraction(result)
+        while True:
+            # Show if clarification is needed
+            if result.get('clarification_needed'):
+                print(f"\n⚠️ Need more details:")
+                print(f"   {result.get('clarification_message', '')}")
+            
+            # Show extraction results
+            self._print_extraction(result)
 
-        # Broad requests: "quiero saber todo sobre ..."
-        if self._is_broad_request(user_input) and result['extracted'].get('organism_variants'):
-            return self._handle_broad_request(result)
+            # Broad requests: "quiero saber todo sobre ..."
+            if self._is_broad_request(user_input) and result['extracted'].get('organism_variants'):
+                return self._handle_broad_request(result)
 
-        print(f"\n✅ NCBI Query:")
-        print(f"   {result['ncbi_query']}")
-        print("\n" + "="*80)
-        print("📋 Copy the query above and paste it into NCBI SRA search")
-        print("="*80 + "\n")
-        return True
+            print(f"\n✅ NCBI Query:")
+            print(f"   {result['ncbi_query']}")
+            print("\n" + "="*80)
+            
+            print("Options:")
+            print("  [y] Yes, continue with this query")
+            print("  [n] No, cancel search")
+            print("  [Or describe what's wrong to refine the query, e.g., 'remove targets from keywords']")
+            
+            response = input("\nYour choice: ").strip()
+            
+            if response.lower() in ['y', 'yes', 's', 'si', '']:
+                print("\n✅ Query accepted!")
+                print("="*80 + "\n")
+                return True
+            elif response.lower() in ['n', 'no']:
+                print("\n❌ Query rejected.")
+                print("="*80 + "\n")
+                return False
+            else:
+                # Treat as feedback for refinement
+                print(f"\n🔄 Refining query based on: '{response}'...")
+                result = self.service.refine_query(result, response)
+                # Loop continues with new result
     
     def _print_extraction(self, result: Dict):
         """Display extracted terms"""
@@ -73,6 +81,7 @@ class InteractiveQueryGenerator:
         print(f"\n🔎 Extracted Terms:")
         print(f"   Organism:    {result['extracted']['organism'] or '(none)'}")
         print(f"   Strategies:  {', '.join(result['extracted']['strategies']) or '(none)'}")
+        print(f"   Genes:       {', '.join(result['extracted']['genes']) or '(none)'}")
         print(f"   Tissues:     {', '.join(result['extracted']['tissues']) or '(none)'}")
         print(f"   Conditions:  {', '.join(result['extracted']['conditions']) or '(none)'}")
         print(f"   Keywords:    {', '.join(result['extracted']['free_terms']) or '(none)'}")
@@ -85,11 +94,20 @@ class InteractiveQueryGenerator:
         print(f"\n🔗 Synonyms:")
         print(f"   Organism:    {org_syn}")
         print(f"   Strategies:  {strat_syn}")
+        print(f"   Genes:       {', '.join(syn.get('genes', []) or []) or '(none)'}")
         print(f"   Tissues:     {tissue_syn}")
         print(f"   Conditions:  {cond_syn}")
         
+        # Convert field tags for PMC if needed
+        display_query = result['ncbi_query']
+        search_db = os.environ.get('SEARCH_DB', 'pubmed')
+        if search_db == 'pmc':
+            display_query = re.sub(r'\[Organism\]', '[all]', display_query)
+            display_query = re.sub(r'\[All Fields\]', '[all]', display_query)
+            result['ncbi_query'] = display_query
+        
         print(f"\n📊 Generated Query:")
-        print(f"   {result['ncbi_query']}")
+        print(f"   {display_query}")
     
     def _ask_satisfaction(self) -> bool:
         """Ask if user is satisfied with the query"""

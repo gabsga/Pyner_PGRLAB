@@ -23,7 +23,7 @@ LOGS_DIR.mkdir(parents=True, exist_ok=True)
 # ============================================
 OLLAMA_BASE_URL = "http://localhost:11434"
 OLLAMA_MODEL = "qwen2.5:14b"
-OLLAMA_TIMEOUT = 120  # seconds
+OLLAMA_TIMEOUT = 600  # seconds (10 minutes)
 
 # ============================================
 # ANALYSIS CONFIGURATION
@@ -38,7 +38,6 @@ MAX_ABSTRACT_LENGTH = 3000
 USE_PMC_FULL_TEXT = True
 
 # Maximum full text length to send to LLM (0 = no limit)
-# Set to 0 to use complete text from PMC
 MAX_FULL_TEXT_LENGTH = 0  # No limit - use complete text
 
 # Batch size for processing papers
@@ -47,7 +46,7 @@ BATCH_SIZE = 10
 # ============================================
 # OUTPUT CONFIGURATION
 # ============================================
-CSV_DELIMITER = ","
+CSV_DELIMITER = "\t"
 MULTIVALUE_SEPARATOR = " ; "  # Separator for multiple organisms/tissues/conditions
 
 # CSV columns order - EXPANDED with detailed experimental metadata
@@ -63,6 +62,8 @@ CSV_COLUMNS = [
     # Relevance
     "Relevance_Score",
     "Is_Relevant",
+    "Summary",
+    "Relevance_Explanation",
     
     # Organism Details
     "Organisms",

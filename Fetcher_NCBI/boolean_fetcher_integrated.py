@@ -393,8 +393,8 @@ class BooleanFetcherIntegrated:
         return self.results
     
     
-    def save_results_csv(self, output_file: Path):
-        """Save results to CSV format."""
+    def save_results_tsv(self, output_file: Path):
+        """Save results to TSV format."""
         if not self.results:
             logger.warning("No results to save")
             return
@@ -403,7 +403,7 @@ class BooleanFetcherIntegrated:
         logger.info(f"💾 SAVING RESULTS")
         logger.info(f"{'='*70}")
         
-        # Define CSV columns
+        # Define columns
         fieldnames = [
             'bioproject',
             'title',
@@ -426,7 +426,7 @@ class BooleanFetcherIntegrated:
         
         try:
             with open(output_file, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames, restval='NA')
+                writer = csv.DictWriter(f, fieldnames=fieldnames, restval='NA', delimiter='\t')
                 writer.writeheader()
                 
                 for result in self.results:
@@ -445,7 +445,7 @@ class BooleanFetcherIntegrated:
             logger.info(f"  - BioProjects without papers: {sum(1 for r in self.results if r.get('publications_found', 0) == 0)}")
             
         except Exception as e:
-            logger.error(f"Error saving CSV: {e}")
+            logger.error(f"Error saving TSV: {e}")
     
     
     def save_results_json(self, output_file: Path):
@@ -548,23 +548,21 @@ def main():
     )
     parser.add_argument("query", help="Boolean search query (e.g., 'Arabidopsis phosphate')")
     parser.add_argument("--max", type=int, default=50, help="Max BioProjects to process (default: 50)")
-    parser.add_argument("--output-csv", type=Path, help="Output CSV file")
+    parser.add_argument("--output-tsv", type=Path, help="Output TSV file")
     parser.add_argument("--output-json", type=Path, help="Output JSON file")
     
     args = parser.parse_args()
     
     # Create output files if not specified
-    if not args.output_csv and not args.output_json:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        args.output_csv = Path(f"boolean_results_{timestamp}.csv")
+        args.output_tsv = Path(f"boolean_results_{timestamp}.tsv")
     
     # Run workflow
     fetcher = BooleanFetcherIntegrated()
     results = fetcher.run_workflow(args.query, max_bioproject=args.max)
     
     # Save results
-    if args.output_csv:
-        fetcher.save_results_csv(args.output_csv)
+    if args.output_tsv:
+        fetcher.save_results_tsv(args.output_tsv)
     
     if args.output_json:
         fetcher.save_results_json(args.output_json)
